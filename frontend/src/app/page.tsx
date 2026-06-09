@@ -173,6 +173,11 @@ const AUTOMATION_META: Record<
 
 // ---------- Helpers ----------
 
+/** Strip raw [doc:UUID] / [mem:UUID] citation tokens so chat reads like prose. */
+function stripCites(text: string): string {
+  return text.replace(/\s*\[(?:doc|mem):[0-9a-fA-F-]{36}\]/g, "").trim();
+}
+
 function timeAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
   const s = Math.max(1, Math.floor(ms / 1000));
@@ -240,6 +245,9 @@ export default function PioneerPage() {
   const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
   const [editingBody, setEditingBody] = useState<string>("");
   const [runBusy, setRunBusy] = useState<Record<string, boolean>>({});
+
+  // Toggle per-message sources view. Default = hidden (Gemini-style).
+  const [openSourcesFor, setOpenSourcesFor] = useState<Record<number, boolean>>({});
 
   const reloadAll = useCallback(async () => {
     try {
@@ -852,57 +860,60 @@ export default function PioneerPage() {
                             <Loader2 size={14} className="animate-spin" /> reading workspace memory…
                           </span>
                         ) : (
-                          <span className="whitespace-pre-wrap">{m.text}{m.role === "ai" && m.streaming ? "▍" : ""}</span>
+                          <span className="whitespace-pre-wrap">{m.role === "ai" ? stripCites(m.text) : m.text}{m.role === "ai" && m.streaming ? "▍" : ""}</span>
                         )}
                       </div>
-                      {m.role === "ai" && m.sources.length > 0 && (() => {
+                      {m.role === "ai" && !m.streaming && m.sources.length > 0 && (() => {
                         const cited = new Set(m.cited ?? []);
-                        // When the model cited specific sources, only show those;
-                        // otherwise show everything offered (transparency over the filter).
                         const visible = m.cited && m.cited.length > 0
                           ? m.sources.filter((s) => cited.has(s.cite_id))
                           : m.sources;
+                        const isOpen = !!openSourcesFor[i];
                         return (
                           <div className="mr-auto mt-2 max-w-[85%]">
-                            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-white/45">
-                              Sources {m.usage ? `· ${m.usage.input_tokens + m.usage.output_tokens} tokens · ${m.usage.provider}/${m.usage.model}` : ""}
-                            </p>
-                            <div className="space-y-2">
-                              {visible.map((s) => {
-                                const isDoc = s.kind === "document";
-                                return (
-                                  <div
-                                    key={s.cite_id}
-                                    className="rounded-xl border px-4 py-2 text-[13px]"
-                                    style={{ background: "rgba(255,255,255,0.02)", borderColor: LINE }}
-                                  >
-                                    <div className="flex items-center justify-between text-white/60">
-                                      <span className="flex items-center gap-2 text-white/85 font-medium">
-                                        {isDoc
-                                          ? <Plug size={14} style={{ color: ACCENT }} />
-                                          : <Brain size={14} style={{ color: ACCENT }} />}
-                                        {s.title}
-                                      </span>
-                                      <span className="font-mono text-[10px] text-white/35">{s.cite_id.slice(0, 12)}…</span>
+                            <button
+                              onClick={() => setOpenSourcesFor((s) => ({ ...s, [i]: !s[i] }))}
+                              className="flex items-center gap-1.5 text-[11px] font-medium text-white/45 hover:text-white/85 transition-colors"
+                            >
+                              {isOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                              {visible.length} source{visible.length === 1 ? "" : "s"}
+                              {m.usage ? <span className="ml-2 text-white/30">· {m.usage.input_tokens + m.usage.output_tokens} tok · {m.usage.provider}</span> : null}
+                            </button>
+                            {isOpen && (
+                              <div className="mt-2 space-y-2">
+                                {visible.map((s) => {
+                                  const isDoc = s.kind === "document";
+                                  return (
+                                    <div
+                                      key={s.cite_id}
+                                      className="rounded-xl border px-4 py-2 text-[13px]"
+                                      style={{ background: "rgba(255,255,255,0.02)", borderColor: LINE }}
+                                    >
+                                      <div className="flex items-center justify-between text-white/60">
+                                        <span className="flex items-center gap-2 text-white/85 font-medium">
+                                          {isDoc
+                                            ? <Plug size={14} style={{ color: ACCENT }} />
+                                            : <Brain size={14} style={{ color: ACCENT }} />}
+                                          {s.title}
+                                        </span>
+                                      </div>
+                                      <p className="mt-1 text-white/50 text-[11px]">{s.collection} · {s.sensitivity}</p>
+                                      {isDoc && s.url && (
+                                        <a
+                                          href={s.url}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="mt-2 inline-flex items-center gap-1 text-[12px] font-medium"
+                                          style={{ color: ACCENT }}
+                                        >
+                                          Open ↗
+                                        </a>
+                                      )}
                                     </div>
-                                    <p className="mt-1 text-white/50 text-[11px]">
-                                      {s.collection} · {s.sensitivity}
-                                    </p>
-                                    {isDoc && s.url && (
-                                      <a
-                                        href={s.url}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="mt-2 inline-flex items-center gap-1 text-[12px] font-medium"
-                                        style={{ color: ACCENT }}
-                                      >
-                                        Open ↗
-                                      </a>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </div>
                         );
                       })()}
