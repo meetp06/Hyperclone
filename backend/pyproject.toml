@@ -1,0 +1,58 @@
+[project]
+name = "pioneer-backend"
+version = "0.1.0"
+description = "Pioneer — company brain. FastAPI backend."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    # Web
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "python-multipart>=0.0.12",
+
+    # DB
+    "sqlalchemy>=2.0.36",
+    "psycopg[binary]>=3.2.3",
+    "alembic>=1.13.3",
+
+    # Auth
+    "pyjwt>=2.9.0",
+    "passlib[bcrypt]>=1.7.4",
+
+    # Cache / queue-ready
+    "redis>=5.1.1",
+
+    # Vectors + embeddings
+    "qdrant-client>=1.12.0",
+    "fastembed>=0.4.2",
+
+    # MCP server
+    "mcp>=1.0.0",
+
+    # Phase 2: async queue + token encryption
+    "arq>=0.26.3",
+    "cryptography>=43.0.0",
+
+    # Phase 4: LLM providers (both optional at runtime; stub fallback works without keys)
+    "anthropic>=0.40.0",
+    "openai>=1.60.0",
+
+    # Misc
+    "httpx>=0.27.2",
+    "python-dotenv>=1.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.7.0",
+    "pytest>=8.3.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]

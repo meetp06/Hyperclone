@@ -1,0 +1,21 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Frontend
+node_modules/
+.next/
+out/
+dist/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Local data (compose volumes are named, but just in case)
+*.log

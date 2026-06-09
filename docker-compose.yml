@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pioneer-postgres
+    environment:
+      POSTGRES_USER: pioneer
+      POSTGRES_PASSWORD: pioneer
+      POSTGRES_DB: pioneer
+    ports:
+      - "5433:5432"
+    volumes:
+      - pioneer_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pioneer -d pioneer"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: pioneer-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - pioneer_qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: pioneer-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - pioneer_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pioneer-worker:
+    build:
+      context: ./backend
+    container_name: pioneer-worker
+    command: ["uv", "run", "arq", "app.worker.main.WorkerSettings"]
+    env_file: ./.env
+    # Override host-localhost URLs from .env with compose service hostnames.
+    environment:
+      DATABASE_URL: postgresql+psycopg://pioneer:pioneer@postgres:5432/pioneer
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: redis://redis:6379/0
+      NOTION_REDIRECT_URI: http://localhost:8001/connectors/notion/oauth/callback
+      FRONTEND_BASE: http://localhost:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Cache fastembed model across rebuilds.
+    volumes:
+      - pioneer_fastembed:/root/.cache/fastembed
+    profiles: ["worker"]   # only starts with: docker compose --profile worker up
+
+volumes:
+  pioneer_pg:
+  pioneer_qdrant:
+  pioneer_redis:
+  pioneer_fastembed:
