@@ -311,17 +311,25 @@ Phase 4 turns Pioneer into a working copilot:
 ```env
 # Phase 4 — Real LLM in Chat + Automations runner
 # `stub` produces a templated answer (app boots cleanly with no API key).
-LLM_PROVIDER=stub                  # stub | anthropic | openai
-LLM_MODEL=claude-sonnet-4-6
+LLM_PROVIDER=stub                  # stub | groq | anthropic | openai
+LLM_MODEL=llama-3.3-70b-versatile
 LLM_MAX_TOKENS=1024
 LLM_TEMPERATURE=0.2
+
+# Groq (free tier, OpenAI-compatible). Comma-separate multiple keys —
+# the provider auto-rotates to the next key when one hits a 429.
+GROQ_API_KEYS=gsk_key1,gsk_key2,gsk_key3
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+
 ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
 AUTOMATIONS_INBOUND_PROVIDER=stub  # stub | linkedin | gmail (later)
 DRAFTS_PER_RUN_MAX=25
 ```
 
-If both `ANTHROPIC_API_KEY` and `LLM_PROVIDER=anthropic` are set, the API uses Claude. If anything is missing or the SDK can't initialize, Pioneer silently falls back to the deterministic stub so dev keeps running. **No restart loop on missing keys.**
+If `LLM_PROVIDER=groq` + `GROQ_API_KEYS=key1,key2,key3` are set, Pioneer uses Groq with **automatic per-call key rotation**: when one key hits a 429 it's marked cooling for the rest of the process and the next key handles the request. If all keys are cooling the oldest one is retried. Set 3 keys, get effectively 3× the free-tier ceiling.
+
+If `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` are set, Pioneer uses Claude. Same for `openai` + `OPENAI_API_KEY`. If any provider can't initialize (missing key, SDK issue) Pioneer silently falls back to the deterministic stub so dev keeps running. **No restart loop on missing keys.**
 
 ### Grounded Chat — streaming SSE
 

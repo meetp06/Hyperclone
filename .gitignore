@@ -1,21 +1,40 @@
+# Secrets — NEVER commit
 .env
+.env.*
+!.env.example
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Python
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+htmlcov/
 
 # Frontend
 node_modules/
 .next/
 out/
 dist/
+.turbo/
 
 # Editor / OS
 .DS_Store
 .idea/
 .vscode/
+*.swp
 
-# Local data (compose volumes are named, but just in case)
+# Logs / tmp
 *.log
+/tmp/
+backend/session-context.md
+
+# Claude
+.claude/

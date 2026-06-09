@@ -73,14 +73,19 @@ class Settings(BaseSettings):
 
     # --- Phase 4 ---
     # LLM provider for grounded chat + automations.
-    # anthropic | openai | stub. `stub` produces a deterministic templated
-    # answer; useful in dev when no API keys are configured.
+    # groq | anthropic | openai | stub. `stub` produces a deterministic
+    # templated answer; useful in dev when no API keys are configured.
     llm_provider: str = "stub"
-    llm_model: str = "claude-sonnet-4-6"
+    llm_model: str = "llama-3.3-70b-versatile"
     llm_max_tokens: int = 1024
     llm_temperature: float = 0.2
     anthropic_api_key: str = ""
     openai_api_key: str = ""
+
+    # Groq (OpenAI-compatible). Comma-separated list of API keys. The
+    # provider auto-rotates to the next key when one hits a rate limit.
+    groq_api_keys: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
 
     # Retrieval budgets for the grounded prompt.
     chat_top_k: int = 6

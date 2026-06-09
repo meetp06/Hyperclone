@@ -221,6 +221,139 @@ class AnthropicLLMProvider(LLMProvider):
 # ---------- OpenAI ----------
 
 
+class GroqLLMProvider(LLMProvider):
+    """Groq via OpenAI-compatible API, with multi-key auto-rotation.
+
+    Holds N keys; tries them in order on every call. When a key is hit
+    with a 429 (rate limit) we mark it "cooling" for the rest of this
+    process — caller falls through to the next key. If all keys are
+    cooling, the last one is retried after a short wait.
+
+    SCALE: track Groq's `x-ratelimit-reset-tokens` header per key and
+    bring keys back online when their window actually expires.
+    """
+
+    name = "groq"
+
+    def __init__(self) -> None:
+        from openai import AsyncOpenAI
+
+        s = get_settings()
+        raw = (s.groq_api_keys or "").strip()
+        keys = [k.strip() for k in raw.split(",") if k.strip()]
+        if not keys:
+            raise RuntimeError("GROQ_API_KEYS is not set")
+        self._clients: list = [
+            AsyncOpenAI(api_key=k, base_url=s.groq_base_url) for k in keys
+        ]
+        self._key_prefixes = [k[:6] + "…" for k in keys]
+        self._cooling: set[int] = set()  # indexes of keys currently rate-limited
+        self.model = s.llm_model
+        self._defaults = dict(max_tokens=s.llm_max_tokens, temperature=s.llm_temperature)
+
+    @staticmethod
+    def _as_chat(messages: list[LLMMessage]) -> list[dict[str, str]]:
+        return [{"role": m.role, "content": m.content} for m in messages]
+
+    def _next_index(self, attempt: int) -> int:
+        # round-robin starting from the first non-cooling key
+        n = len(self._clients)
+        for offset in range(n):
+            idx = (attempt + offset) % n
+            if idx not in self._cooling:
+                return idx
+        # all cooling — reset and retry
+        self._cooling.clear()
+        return attempt % n
+
+    @staticmethod
+    def _is_rate_limit(err: Exception) -> bool:
+        from openai import RateLimitError
+
+        if isinstance(err, RateLimitError):
+            return True
+        status = getattr(err, "status_code", None) or getattr(err, "status", None)
+        return status == 429
+
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> LLMResult:
+        chat_messages = self._as_chat(messages)
+        last_err: Exception | None = None
+        for attempt in range(len(self._clients)):
+            idx = self._next_index(attempt)
+            client = self._clients[idx]
+            try:
+                resp = await client.chat.completions.create(
+                    model=self.model,
+                    messages=chat_messages,
+                    max_tokens=max_tokens or self._defaults["max_tokens"],
+                    temperature=temperature if temperature is not None else self._defaults["temperature"],
+                )
+                text = resp.choices[0].message.content or ""
+                u = resp.usage
+                usage = LLMUsage(
+                    input_tokens=getattr(u, "prompt_tokens", 0) or 0,
+                    output_tokens=getattr(u, "completion_tokens", 0) or 0,
+                )
+                return LLMResult(text=text, usage=usage)
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                if self._is_rate_limit(e):
+                    self._cooling.add(idx)
+                    continue
+                raise
+        assert last_err is not None
+        raise last_err
+
+    async def stream(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        chat_messages = self._as_chat(messages)
+        last_err: Exception | None = None
+        for attempt in range(len(self._clients)):
+            idx = self._next_index(attempt)
+            client = self._clients[idx]
+            try:
+                stream = await client.chat.completions.create(
+                    model=self.model,
+                    messages=chat_messages,
+                    max_tokens=max_tokens or self._defaults["max_tokens"],
+                    temperature=temperature if temperature is not None else self._defaults["temperature"],
+                    stream=True,
+                    stream_options={"include_usage": True},
+                )
+                usage = LLMUsage()
+                async for event in stream:
+                    if event.choices:
+                        delta = event.choices[0].delta.content or ""
+                        if delta:
+                            yield LLMStreamEvent(delta=delta)
+                    if event.usage is not None:
+                        usage = LLMUsage(
+                            input_tokens=event.usage.prompt_tokens or 0,
+                            output_tokens=event.usage.completion_tokens or 0,
+                        )
+                yield LLMStreamEvent(done=True, usage=usage)
+                return
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                if self._is_rate_limit(e):
+                    self._cooling.add(idx)
+                    continue
+                raise
+        assert last_err is not None
+        raise last_err
+
+
 class OpenAILLMProvider(LLMProvider):
     name = "openai"
 
@@ -304,7 +437,9 @@ def get_llm() -> LLMProvider:
     s = get_settings()
     choice = (s.llm_provider or "stub").lower()
     try:
-        if choice == "anthropic":
+        if choice == "groq":
+            _default = GroqLLMProvider()
+        elif choice == "anthropic":
             _default = AnthropicLLMProvider()
         elif choice == "openai":
             _default = OpenAILLMProvider()
