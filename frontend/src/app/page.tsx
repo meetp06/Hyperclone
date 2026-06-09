@@ -128,11 +128,11 @@ type ProviderMeta = {
 
 const CONNECTOR_META: ProviderMeta[] = [
   { id: "notion",  name: "Notion",          desc: "Pages and docs",         bg: "#fff",    color: "#000",    letter: "N", oauth: true },
+  { id: "gmail",   name: "Gmail",           desc: "Inbox threads",          bg: "#fff",    color: "#ea4335", letter: "M", oauth: true },
+  { id: "github",  name: "GitHub",          desc: "Markdown in repos",      bg: "#fff",    color: "#000",    icon: Github, oauth: true },
   { id: "gdrive",  name: "Google Drive",    desc: "Docs and sheets",        bg: "#fff",    color: "#1a73e8", letter: "▲" },
-  { id: "gmail",   name: "Gmail",           desc: "Inbox threads",          bg: "#fff",    color: "#ea4335", letter: "M" },
   { id: "gcal",    name: "Google Calendar", desc: "Meetings and events",    bg: "#1a73e8", color: "#fff",    letter: "31" },
   { id: "granola", name: "Granola",         desc: "Meeting notes",          bg: "#b9d44a", color: "#1a2c00", letter: "G" },
-  { id: "github",  name: "GitHub",          desc: "Markdown in repos",      bg: "#fff",    color: "#000",    icon: Github },
   { id: "slack",   name: "Slack",           desc: "Channel and DM history", bg: "#fff",    color: "#611f69", letter: "#" },
   { id: "linear",  name: "Linear",          desc: "Issues and projects",    bg: "#5e6ad2", color: "#fff",    letter: "L" },
 ];

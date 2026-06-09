@@ -7,10 +7,14 @@ The worker and routers always look up through this registry.
 from __future__ import annotations
 
 from app.connectors.base import Connector
+from app.connectors.github import GitHubConnector
+from app.connectors.gmail import GmailConnector
 from app.connectors.notion import NotionConnector
 
 _REGISTRY: dict[str, Connector] = {
     "notion": NotionConnector(),
+    "gmail": GmailConnector(),
+    "github": GitHubConnector(),
 }
 
 

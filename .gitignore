@@ -24,6 +24,8 @@ node_modules/
 out/
 dist/
 .turbo/
+tsconfig.tsbuildinfo
+**/tsconfig.tsbuildinfo
 
 # Editor / OS
 .DS_Store

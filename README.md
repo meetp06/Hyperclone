@@ -124,7 +124,15 @@ The local seed script and `docker-compose.yml` already wire `REDIS_URL` from Pha
 
 > **Port reminder.** Phase 1 picked **8001** for the API because 8000 was busy on this machine. Notion's redirect URI must match exactly — use `http://localhost:8001/...`. If you move the API to a different port, update both `NOTION_REDIRECT_URI` *and* the redirect URI registered in your Notion app.
 
-### 1. Create a Notion public OAuth integration
+### Connectors with real OAuth
+
+Three connectors are wired today: **Notion**, **Gmail**, **GitHub**. Each one needs an OAuth app registered with the provider + client id/secret in `.env`. Steps below.
+
+The other connectors (Drive, Calendar, Slack, Linear, Granola) are Phase-1 stubs — clicking Connect only flips a DB row to `connected`; no data flows. They're placeholders for the same `Connector` framework.
+
+#### Notion
+
+
 
 1. Sign in at <https://www.notion.so/profile/integrations> → **New integration**.
 2. Pick **Public integration**. Give it a name (e.g. `Pioneer Local`).
@@ -133,6 +141,36 @@ The local seed script and `docker-compose.yml` already wire `REDIS_URL` from Pha
    - Redirect URI: `http://localhost:8001/connectors/notion/oauth/callback`
    - Allowed origins: not required for the server-to-server token exchange.
 5. Copy the **Client ID** and **Client Secret** into `.env`.
+
+#### Gmail
+
+1. <https://console.cloud.google.com/> → pick or create a project.
+2. **APIs & Services → Enabled APIs → Enable** the **Gmail API**.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID**.
+   - Application type: **Web application**.
+   - Authorized redirect URI: `http://localhost:8001/connectors/gmail/oauth/callback`
+4. **APIs & Services → OAuth consent screen** → External → add your email as a test user (so unverified app still works for you).
+   - Scopes: add `https://www.googleapis.com/auth/gmail.readonly`.
+5. Copy **Client ID** and **Client Secret** into `.env`:
+   ```env
+   GMAIL_CLIENT_ID=...
+   GMAIL_CLIENT_SECRET=...
+   ```
+6. Restart API. Click **Connect** on the Gmail tile → consent → land back → Pioneer pulls your last N inbox messages and indexes them. Default sensitivity = `restricted` (email is private — adjust per agent via the Access panel).
+
+#### GitHub
+
+1. <https://github.com/settings/developers> → **OAuth Apps → New OAuth App**.
+   - Application name: anything (e.g. `Pioneer Local`)
+   - Homepage URL: `http://localhost:3000`
+   - Authorization callback URL: `http://localhost:8001/connectors/github/oauth/callback`
+2. **Generate a new client secret**.
+3. Copy **Client ID** and **Client Secret** into `.env`:
+   ```env
+   GITHUB_CLIENT_ID=...
+   GITHUB_CLIENT_SECRET=...
+   ```
+4. Restart API. Click **Connect** on the GitHub tile → consent (asks for `repo,read:user`) → Pioneer walks your recently-updated repos (default 15) and ingests every `.md` file (default 20/repo) it finds at the root + in `docs/`, `notes/`, `specs/`.
 
 ### 2. Run the worker
 

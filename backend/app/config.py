@@ -54,6 +54,19 @@ class Settings(BaseSettings):
     notion_oauth_authorize: str = "https://api.notion.com/v1/oauth/authorize"
     notion_oauth_token: str = "https://api.notion.com/v1/oauth/token"
 
+    # Gmail (Google OAuth 2.0)
+    gmail_client_id: str = ""
+    gmail_client_secret: str = ""
+    gmail_redirect_uri: str = "http://localhost:8001/connectors/gmail/oauth/callback"
+    gmail_max_messages: int = 50
+
+    # GitHub OAuth App
+    github_client_id: str = ""
+    github_client_secret: str = ""
+    github_redirect_uri: str = "http://localhost:8001/connectors/github/oauth/callback"
+    github_max_repos: int = 15
+    github_max_files_per_repo: int = 20
+
     # Where the backend should redirect users at the end of the OAuth dance.
     frontend_base: str = "http://localhost:3000"
 
