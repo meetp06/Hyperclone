@@ -219,6 +219,7 @@ export default function PioneerPage() {
   const [memories, setMemories] = useState<MemoryRow[]>([]);
 
   const [connectBusy, setConnectBusy] = useState<Record<string, boolean>>({});
+  const [syncBusy, setSyncBusy] = useState<Record<string, boolean>>({});
   const [syncStatus, setSyncStatus] = useState<Record<string, SyncStatus>>({});
   const [oauthBanner, setOauthBanner] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
@@ -407,10 +408,18 @@ export default function PioneerPage() {
   };
 
   const manualSync = async (connectorId: string) => {
+    setSyncBusy((s) => ({ ...s, [connectorId]: true }));
     try {
       await api.connectors.sync(connectorId);
+      // Optimistically flip to syncing so the poll effect starts tracking
+      // progress immediately — no waiting for the next list refresh.
+      setConnectors((rows) =>
+        rows.map((r) => (r.id === connectorId ? { ...r, status: "syncing" } : r)),
+      );
     } catch (e) {
       console.error(e);
+    } finally {
+      setSyncBusy((s) => ({ ...s, [connectorId]: false }));
     }
   };
 
@@ -972,9 +981,13 @@ export default function PioneerPage() {
                 const row = connectorByProvider[c.id];
                 const live = row ? syncStatus[row.id] : undefined;
                 const status = row?.status ?? "disconnected";
-                const connected = status === "connected";
-                const syncing = status === "connecting" || status === "syncing";
-                const errored = status === "error";
+                // Only real OAuth connectors (Notion, Gmail, GitHub) can be
+                // truly connected. The rest are stubs — never show a fake
+                // "Connected", show a muted "Soon" pill instead.
+                const isOauth = !!c.oauth;
+                const connected = isOauth && status === "connected";
+                const syncing = isOauth && (status === "connecting" || status === "syncing");
+                const errored = isOauth && status === "error";
                 return (
                   <div key={c.id} className="mb-4 rounded-2xl border px-5 py-4" style={{ background: CARD, borderColor: LINE }}>
                     <div className="flex items-center justify-between">
@@ -1000,23 +1013,48 @@ export default function PioneerPage() {
                       ) : connected ? (
                         <div className="flex items-center gap-3">
                           <Connected />
-                          {c.oauth && row && (
+                          {row && (
                             <button
                               onClick={() => manualSync(row.id)}
-                              className="rounded-lg px-3 py-1.5 text-xs font-medium text-white/80 transition-colors"
+                              disabled={!!syncBusy[row.id]}
+                              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-white/80 transition-colors hover:bg-white/10 disabled:opacity-50"
                               style={{ background: "rgba(255,255,255,0.07)" }}
                               title="Sync now"
                             >
-                              Sync now
+                              {syncBusy[row.id] ? (
+                                <>
+                                  <Loader2 size={12} className="animate-spin" /> Syncing…
+                                </>
+                              ) : (
+                                "Sync now"
+                              )}
                             </button>
                           )}
                         </div>
                       ) : errored ? (
-                        <span className="text-sm font-medium text-red-300">
-                          Error
-                        </span>
-                      ) : (
+                        <div className="flex items-center gap-3">
+                          <span className="text-sm font-medium text-red-300">Error</span>
+                          {row && (
+                            <button
+                              onClick={() => manualSync(row.id)}
+                              disabled={!!syncBusy[row.id]}
+                              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-white/80 transition-colors hover:bg-white/10 disabled:opacity-50"
+                              style={{ background: "rgba(255,255,255,0.07)" }}
+                              title="Retry"
+                            >
+                              {syncBusy[row.id] ? <Loader2 size={12} className="animate-spin" /> : "Retry"}
+                            </button>
+                          )}
+                        </div>
+                      ) : isOauth ? (
                         <ConnectBtn busy={!!connectBusy[c.id]} onClick={() => connect(c)} />
+                      ) : (
+                        <span
+                          className="rounded-lg px-3 py-1.5 text-xs font-medium text-white/40"
+                          style={{ background: "rgba(255,255,255,0.04)" }}
+                        >
+                          Soon
+                        </span>
                       )}
                     </div>
                     {errored && live?.error && (
