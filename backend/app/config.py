@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     # groq | anthropic | openai | stub. `stub` produces a deterministic
     # templated answer; useful in dev when no API keys are configured.
     llm_provider: str = "stub"
-    llm_model: str = "llama-3.3-70b-versatile"
+    llm_model: str = "openai/gpt-oss-120b"
     llm_max_tokens: int = 1024
     llm_temperature: float = 0.2
     anthropic_api_key: str = ""
