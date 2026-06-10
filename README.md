@@ -474,6 +474,45 @@ The Workspace screen's token bar reads `GET /workspaces/current/usage`, which is
 - Token accounting hits PG per call. Aggregate per-workspace in Redis and flush every N seconds at scale.
 - Retrieved content is fenced + escaped — that's the baseline. A real prompt-injection defense pass adds content-aware sanitization + a separate moderation call.
 
+## Phase 5 — Agentic chat (exact answers) + Groq + auto-sync
+
+Pure RAG can't count or sort by date — it only sees the top-k most *similar* chunks. Phase 5 gives the chat model **tools** it can call for exact, structured answers, plus scheduled freshness.
+
+### Agentic tools
+
+The model decides when to call a tool; the backend runs a Postgres query (access-controlled by the same Phase-3 filter) and feeds the result back:
+
+| Tool | Answers | Example |
+|---|---|---|
+| `count_documents` | counts, optionally by collection / recent days / title substring | "how many job emails this month" |
+| `list_recent_documents` | newest items by date | "my last email", "latest github repo" |
+
+Normal questions still answer from semantic context in one shot — tools only fire for counting / recency. Every tool call is recorded in the chat audit row (`scope.tool_calls`).
+
+`app/services/agent_tools.py` defines the tools; `app/services/agent_chat.py:resolve_chat` runs the tool loop (max 3 rounds) with a graceful fallback — a flaky tool call degrades to a plain context answer, the endpoint never 500s. Both `POST /chat` and `POST /chat/stream` route through the resolver.
+
+### Groq (free, multi-key rotation)
+
+`LLM_PROVIDER=groq` uses Groq's OpenAI-compatible API. `GROQ_API_KEYS` takes a **comma-separated list** of keys; the provider auto-rotates to the next key when one hits a 429 rate limit, so three free keys ≈ 3× the throughput.
+
+```env
+LLM_PROVIDER=groq
+LLM_MODEL=llama-3.3-70b-versatile
+GROQ_API_KEYS=gsk_key1,gsk_key2,gsk_key3
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+```
+
+Tool-calling requires a tool-capable model (llama-3.3-70b-versatile supports it). `stub` and `anthropic` fall back to context-only answers.
+
+### Scheduled auto-sync (freshness)
+
+The worker runs a cron job (`auto_refresh`) at **:00 and :30** every hour that re-syncs every credentialed connector (Notion, Gmail, GitHub) so chat always reflects the latest data without a manual "Sync now". One cron fans out to per-connector `sync_connector` jobs.
+
+```bash
+# the cron is registered automatically when the worker runs:
+cd backend && uv run arq app.worker.main.WorkerSettings
+```
+
 ## Architecture notes
 
 - **`workspace_id` everywhere.** PG tables + Qdrant payloads. Every read filters by it.

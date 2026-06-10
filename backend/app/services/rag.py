@@ -43,6 +43,7 @@ class Source:
     sensitivity: str
     # Citation token the model is asked to emit: [mem:<uuid>] or [doc:<uuid>]
     cite_id: str
+    date: str | None = None  # ISO date so the model can reason about recency
 
 
 def _chunk_text_for(body: str, idx: int, settings) -> str:
@@ -84,6 +85,7 @@ def build_sources(
                     collection=getattr(m.memory, "collection", "manual"),
                     sensitivity=getattr(m.memory, "sensitivity", "internal"),
                     cite_id=f"mem:{m.memory.id}",
+                    date=m.memory.created_at.isoformat() if getattr(m.memory, "created_at", None) else None,
                 ),
             )
         )
@@ -102,6 +104,7 @@ def build_sources(
                     collection=getattr(c.document, "collection", c.document.provider),
                     sensitivity=getattr(c.document, "sensitivity", "internal"),
                     cite_id=f"doc:{c.document.id}",
+                    date=c.document.updated_at.isoformat() if getattr(c.document, "updated_at", None) else None,
                 ),
             )
         )
@@ -141,7 +144,8 @@ def build_messages(query: str, sources: list[Source]) -> list[LLMMessage]:
         for s in sources:
             parts.append(
                 f'<source id="{s.cite_id}" kind="{s.kind}" title={_q(s.title)} '
-                f'collection="{s.collection}" sensitivity="{s.sensitivity}">'
+                f'collection="{s.collection}" sensitivity="{s.sensitivity}" '
+                f'date="{s.date or "unknown"}">'
             )
             # Escape closing fences inside untrusted content so a doc can't
             # forge a `</source>` and break out of the block.

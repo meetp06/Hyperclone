@@ -25,7 +25,7 @@ from app.schemas.memory import (
 )
 from app.services import memory as memory_service
 from app.services import rag
-from app.services.llm import LLMUsage, get_llm
+from app.services.llm import LLMUsage
 from app.services.rag import _chunk_text_for  # internal helper reuse
 from app.services.usage import record_usage
 
@@ -116,6 +116,24 @@ def _filter_to_cited(sources: list[rag.Source], answer: str) -> list[rag.Source]
     return [s for s in sources if s.cite_id in cited]
 
 
+def _sources_as_hits(sources: list[rag.Source]) -> list[SearchHit]:
+    """Map resolver Sources to the SearchHit shape for the JSON /chat response."""
+    out: list[SearchHit] = []
+    for s in sources:
+        if s.kind == "memory":
+            out.append(SearchHit(kind="memory", score=0.0, memory=None))
+        else:
+            out.append(
+                SearchHit(
+                    kind="document", score=0.0,
+                    document_id=s.id, document_title=s.title,
+                    document_url=s.url, document_provider=s.collection,
+                    chunk_index=None, chunk_text=s.snippet[:600],
+                )
+            )
+    return out
+
+
 def _finalize_audit(
     db: Session,
     principal: Principal,
@@ -126,6 +144,7 @@ def _finalize_audit(
     usage: LLMUsage,
     provider: str,
     model: str,
+    tool_calls: list[str] | None = None,
 ) -> None:
     """One audit row per chat, recording sources offered + cited + tokens."""
     audit_chain.append(
@@ -141,6 +160,7 @@ def _finalize_audit(
             "query": query[:280],
             "sources_offered": [s.cite_id for s in sources],
             "sources_cited": [s.cite_id for s in cited],
+            "tool_calls": tool_calls or [],
             "tokens_in": usage.input_tokens,
             "tokens_out": usage.output_tokens,
             "provider": provider,
@@ -160,24 +180,17 @@ async def chat(
     principal: Principal = Depends(principal_for_request),
     db: Session = Depends(get_db),
 ) -> ChatResponse:
-    mem_hits, doc_hits, sources = _retrieve_and_build_sources(
-        db, principal, req.query, req.top_k
-    )
-    llm = get_llm()
-    messages = rag.build_messages(req.query, sources)
-    result = await llm.complete(messages)
-    cited = _filter_to_cited(sources, result.text)
+    from app.services.agent_chat import resolve_chat
+
+    outcome = await resolve_chat(db, principal, req.query, req.top_k)
+    cited = _filter_to_cited(outcome.sources, outcome.answer)
     _finalize_audit(
-        db,
-        principal,
-        query=req.query,
-        sources=sources,
-        cited=cited,
-        usage=result.usage,
-        provider=llm.name,
-        model=llm.model,
+        db, principal,
+        query=req.query, sources=outcome.sources, cited=cited,
+        usage=outcome.usage, provider=outcome.provider, model=outcome.model,
+        tool_calls=outcome.tool_calls,
     )
-    return ChatResponse(answer=result.text, hits=_hits_payload(mem_hits, doc_hits))
+    return ChatResponse(answer=outcome.answer, hits=_sources_as_hits(outcome.sources))
 
 
 # ---------- Streaming SSE ----------
@@ -187,63 +200,53 @@ def _sse(event: str, data: dict | list) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode("utf-8")
 
 
+def _word_chunks(text: str, n: int = 5):
+    words = text.split(" ")
+    for i in range(0, len(words), n):
+        yield " ".join(words[i : i + n]) + (" " if i + n < len(words) else "")
+
+
 @router.post("/stream")
 async def chat_stream(
     req: ChatRequest,
     principal: Principal = Depends(principal_for_request),
 ) -> StreamingResponse:
-    """Server-sent events stream:
-      event: sources  → list of ChatSource available to the model
+    """Server-sent events. The agentic resolver runs first (may call tools),
+    then the final answer is streamed out as word chunks for UX.
+
+      event: sources  → list of ChatSource the answer drew on
       event: delta    → {text}
       event: usage    → {input_tokens, output_tokens, provider, model}
       event: done     → {cited: [cite_id]}
     """
 
     async def gen() -> AsyncIterator[bytes]:
+        from app.services.agent_chat import resolve_chat
+
         db = SessionLocal()
         try:
-            mem_hits, doc_hits, sources = _retrieve_and_build_sources(
-                db, principal, req.query, req.top_k
-            )
-            payload = _source_payload(sources)
+            outcome = await resolve_chat(db, principal, req.query, req.top_k)
+
+            payload = _source_payload(outcome.sources)
             yield _sse("sources", [p.model_dump(mode="json") for p in payload])
 
-            llm = get_llm()
-            messages = rag.build_messages(req.query, sources)
+            for chunk in _word_chunks(outcome.answer):
+                yield _sse("delta", {"text": chunk})
 
-            collected: list[str] = []
-            usage = LLMUsage()
-            async for ev in llm.stream(messages):
-                if ev.delta:
-                    collected.append(ev.delta)
-                    yield _sse("delta", {"text": ev.delta})
-                if ev.done and ev.usage is not None:
-                    usage = ev.usage
-
-            answer = "".join(collected)
-            cited = _filter_to_cited(sources, answer)
-            yield _sse(
-                "usage",
-                {
-                    "input_tokens": usage.input_tokens,
-                    "output_tokens": usage.output_tokens,
-                    "provider": llm.name,
-                    "model": llm.model,
-                },
-            )
+            cited = _filter_to_cited(outcome.sources, outcome.answer)
+            yield _sse("usage", {
+                "input_tokens": outcome.usage.input_tokens,
+                "output_tokens": outcome.usage.output_tokens,
+                "provider": outcome.provider,
+                "model": outcome.model,
+            })
             yield _sse("done", {"cited": [s.cite_id for s in cited]})
 
-            # Persist audit + usage AFTER the stream completes so the
-            # client never blocks on PG between deltas.
             _finalize_audit(
-                db,
-                principal,
-                query=req.query,
-                sources=sources,
-                cited=cited,
-                usage=usage,
-                provider=llm.name,
-                model=llm.model,
+                db, principal,
+                query=req.query, sources=outcome.sources, cited=cited,
+                usage=outcome.usage, provider=outcome.provider, model=outcome.model,
+                tool_calls=outcome.tool_calls,
             )
         finally:
             db.close()
@@ -251,8 +254,5 @@ async def chat_stream(
     return StreamingResponse(
         gen(),
         media_type="text/event-stream",
-        headers={
-            "cache-control": "no-cache",
-            "x-accel-buffering": "no",
-        },
+        headers={"cache-control": "no-cache", "x-accel-buffering": "no"},
     )

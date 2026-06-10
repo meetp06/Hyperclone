@@ -34,3 +34,35 @@ async def run_automations(ctx: dict[str, Any], workspace_id: str) -> dict[str, A
     from app.automations.runner import run_automations as _run
 
     return await _run(workspace_id)
+
+
+async def auto_refresh(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Scheduled freshness job (cron). Re-sync every connector that has
+    stored credentials so chat always reflects the latest emails / repos /
+    pages. Enqueues one sync_connector per connector — they run through the
+    same pipeline as a manual "Sync now".
+
+    SCALE: per-tenant schedules + provider webhooks replace this blanket
+    poll; today one cron fans out to all connected connectors.
+    """
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import Connector, ConnectorCredentials
+
+    db = SessionLocal()
+    try:
+        # Only connectors with credentials (real OAuth ones) are syncable.
+        cred_ids = {
+            r for r in db.scalars(select(ConnectorCredentials.connector_id))
+        }
+        rows = list(db.scalars(select(Connector)))
+        enqueued = 0
+        for c in rows:
+            if c.id in cred_ids:
+                await ctx["redis"].enqueue_job("sync_connector", str(c.id))
+                enqueued += 1
+        log.info("auto_refresh enqueued %d connector syncs", enqueued)
+        return {"ok": True, "enqueued": enqueued}
+    finally:
+        db.close()

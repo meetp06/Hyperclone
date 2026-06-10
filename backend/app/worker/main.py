@@ -19,10 +19,11 @@ from urllib.parse import urlparse
 
 import os
 
+from arq import cron
 from arq.connections import RedisSettings
 
 from app.config import get_settings
-from app.worker.jobs import ping, run_automations, sync_connector
+from app.worker.jobs import auto_refresh, ping, run_automations, sync_connector
 
 
 async def _on_startup(ctx: dict) -> None:
@@ -59,7 +60,10 @@ _settings = get_settings()
 
 
 class WorkerSettings:
-    functions = [ping, sync_connector, run_automations]
+    functions = [ping, sync_connector, run_automations, auto_refresh]
+    # Freshness: re-sync every credentialed connector at :00 and :30 so chat
+    # always reflects the latest emails / repos / pages without a manual sync.
+    cron_jobs = [cron(auto_refresh, minute={0, 30}, run_at_startup=False)]
     redis_settings = _redis_settings_from_url(_settings.redis_url)
     max_jobs = _settings.arq_max_jobs
     keep_result = 3600  # seconds

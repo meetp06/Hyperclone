@@ -53,9 +53,29 @@ class LLMStreamEvent:
     usage: LLMUsage | None = None
 
 
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict
+
+
+@dataclass
+class ToolTurn:
+    """One round of an agentic loop. Either `text` (final answer) or
+    `tool_calls` (the model wants data) is populated. `raw_assistant` is
+    the provider-shaped assistant message to append before tool results."""
+
+    text: str | None
+    tool_calls: list[ToolCall]
+    usage: LLMUsage
+    raw_assistant: dict | None = None
+
+
 class LLMProvider(ABC):
     name: str = ""
     model: str = ""
+    supports_tools: bool = False
 
     @abstractmethod
     async def complete(
@@ -74,6 +94,19 @@ class LLMProvider(ABC):
         max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> AsyncIterator[LLMStreamEvent]: ...
+
+    async def complete_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        *,
+        tool_choice: str = "auto",
+        max_tokens: int | None = None,
+    ) -> ToolTurn:
+        """Run one completion that may emit tool calls. Providers that
+        don't support tools should not be called here (guard on
+        `supports_tools`)."""
+        raise NotImplementedError
 
 
 # ---------- Stub ----------
@@ -234,6 +267,7 @@ class GroqLLMProvider(LLMProvider):
     """
 
     name = "groq"
+    supports_tools = True
 
     def __init__(self) -> None:
         from openai import AsyncOpenAI
@@ -250,6 +284,36 @@ class GroqLLMProvider(LLMProvider):
         self._cooling: set[int] = set()  # indexes of keys currently rate-limited
         self.model = s.llm_model
         self._defaults = dict(max_tokens=s.llm_max_tokens, temperature=s.llm_temperature)
+
+    async def complete_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        *,
+        tool_choice: str = "auto",
+        max_tokens: int | None = None,
+    ) -> "ToolTurn":
+        last_err: Exception | None = None
+        for attempt in range(len(self._clients)):
+            idx = self._next_index(attempt)
+            client = self._clients[idx]
+            try:
+                return await _openai_tool_turn(
+                    client,
+                    model=self.model,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    max_tokens=max_tokens or self._defaults["max_tokens"],
+                )
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                if self._is_rate_limit(e):
+                    self._cooling.add(idx)
+                    continue
+                raise
+        assert last_err is not None
+        raise last_err
 
     @staticmethod
     def _as_chat(messages: list[LLMMessage]) -> list[dict[str, str]]:
@@ -356,6 +420,7 @@ class GroqLLMProvider(LLMProvider):
 
 class OpenAILLMProvider(LLMProvider):
     name = "openai"
+    supports_tools = True
 
     def __init__(self) -> None:
         from openai import AsyncOpenAI
@@ -366,6 +431,23 @@ class OpenAILLMProvider(LLMProvider):
         self._client = AsyncOpenAI(api_key=s.openai_api_key)
         self.model = s.llm_model
         self._defaults = dict(max_tokens=s.llm_max_tokens, temperature=s.llm_temperature)
+
+    async def complete_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        *,
+        tool_choice: str = "auto",
+        max_tokens: int | None = None,
+    ) -> "ToolTurn":
+        return await _openai_tool_turn(
+            self._client,
+            model=self.model,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            max_tokens=max_tokens or self._defaults["max_tokens"],
+        )
 
     @staticmethod
     def _as_chat(messages: list[LLMMessage]) -> list[dict[str, str]]:
@@ -419,6 +501,65 @@ class OpenAILLMProvider(LLMProvider):
                     output_tokens=event.usage.completion_tokens or 0,
                 )
         yield LLMStreamEvent(done=True, usage=usage)
+
+
+# ---------- Shared OpenAI-compatible tool turn ----------
+
+
+async def _openai_tool_turn(
+    client,
+    *,
+    model: str,
+    messages: list[dict],
+    tools: list[dict],
+    tool_choice: str,
+    max_tokens: int,
+) -> ToolTurn:
+    import json as _json
+
+    kwargs: dict = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": 0.1,
+    }
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = tool_choice
+    resp = await client.chat.completions.create(**kwargs)
+    choice = resp.choices[0]
+    msg = choice.message
+    u = resp.usage
+    usage = LLMUsage(
+        input_tokens=getattr(u, "prompt_tokens", 0) or 0,
+        output_tokens=getattr(u, "completion_tokens", 0) or 0,
+    )
+
+    tool_calls: list[ToolCall] = []
+    raw_assistant: dict | None = None
+    if getattr(msg, "tool_calls", None):
+        raw_tcs = []
+        for tc in msg.tool_calls:
+            try:
+                args = _json.loads(tc.function.arguments or "{}")
+            except Exception:  # noqa: BLE001
+                args = {}
+            tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
+            raw_tcs.append(
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+            )
+        raw_assistant = {"role": "assistant", "content": msg.content or "", "tool_calls": raw_tcs}
+
+    return ToolTurn(
+        text=(msg.content or None) if not tool_calls else (msg.content or None),
+        tool_calls=tool_calls,
+        usage=usage,
+        raw_assistant=raw_assistant,
+    )
 
 
 # ---------- Factory ----------
